@@ -373,7 +373,7 @@
     const imgFailCache = new Set(); // filenames that fully failed
 
     function imgCandidates(itemName, filename) {
-      // Icons are stored as "Item Name.png" (item name), not wiki filenames
+      // Images are stored as "Item Name.webp" (item name), not wiki filenames
       const name = decodeEntities((itemName || "").trim());
       let clean = decodeEntities((filename || "").trim()).replace(/^.*[\\/]/, "");
 
@@ -385,30 +385,30 @@
         localNames.push(n.replace(/ /g, "%20"));
       }
 
-      // Primary: item name as filename (matches user's icons folder)
+      // Primary: item name as filename (matches user's images folder)
       if (name) {
-        add(name + ".png");
-        add(name + ".PNG");
+        add(name + ".webp");
+        add(name + ".WEBP");
         // strip characters often removed from file names
         const safe = name.replace(/[\\/:*?"<>|]/g, "").replace(/\s+/g, " ").trim();
         if (safe !== name) {
-          add(safe + ".png");
-          add(safe + ".PNG");
+          add(safe + ".webp");
+          add(safe + ".WEBP");
         }
-        // parentheses: "Wooden Mannequin (F)" -> "Wooden Mannequin F.png"
+        // parentheses: "Wooden Mannequin (F)" -> "Wooden Mannequin F.webp"
         if (name.indexOf("(") !== -1) {
           const noParen = name.replace(/\(([^)]*)\)/g, "$1").replace(/\s+/g, " ").trim();
-          add(noParen + ".png");
+          add(noParen + ".webp");
           const stripParen = name.replace(/\s*\([^)]*\)/g, "").replace(/\s+/g, " ").trim();
-          add(stripParen + ".png");
+          add(stripParen + ".webp");
         }
         if (name.indexOf("'") !== -1) {
-          add(name.replace(/'/g, "") + ".png");
-          add(name.replace(/'/g, "_") + ".png");
+          add(name.replace(/'/g, "") + ".webp");
+          add(name.replace(/'/g, "_") + ".webp");
         }
         if (name.indexOf("&") !== -1) {
-          add(name.replace(/&/g, "and") + ".png");
-          add(name.replace(/ & /g, " ") + ".png");
+          add(name.replace(/&/g, "and") + ".webp");
+          add(name.replace(/ & /g, " ") + ".webp");
         }
         // periods in names like "A.E.G.I.S. Helmet" sometimes kept as-is (already covered)
       }
@@ -416,9 +416,9 @@
       // Secondary: wiki image filename if present
       if (clean) {
         add(clean);
-        const noExt = clean.replace(/\.png$/i, "");
-        add(noExt + ".png");
-        add(noExt + ".PNG");
+        const noExt = clean.replace(/\.webp$/i, "");
+        add(noExt + ".webp");
+        add(noExt + ".WEBP");
       }
 
       const seen = new Set();
@@ -427,7 +427,7 @@
         const key = n.toLowerCase();
         if (seen.has(key)) continue;
         seen.add(key);
-        cands.push("icons/" + n);
+        cands.push("images/" + n);
       }
 
       if (clean) {
@@ -444,7 +444,7 @@
     function itemImgHtml(name, size) {
       size = size || 28;
       const fn = imageMap.get(name) || "";
-      const cacheKey = name; // icons are named by item name
+      const cacheKey = name; // images are named by item name
 
       if (imgFailCache.has(cacheKey)) {
         return '<span class="ii-ph" style="width:' + size + 'px;height:' + size + 'px">' +
