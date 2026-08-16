@@ -309,6 +309,33 @@
     }
     footer a { color: var(--accent); }
 
+    .effect-grid {
+      display: flex; flex-wrap: wrap; gap: 8px 14px;
+      font-size: .88rem;
+    }
+    .effect-stat {
+      display: inline-flex; align-items: baseline; gap: 6px;
+      background: var(--hover);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 10px;
+    }
+    .effect-stat .elabel { color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .03em; }
+    .effect-stat .eval { color: var(--green); font-weight: 600; }
+    .effect-stat .eval.neg { color: var(--red); }
+    .buff-chip {
+      display: inline-flex; flex-direction: column; gap: 2px;
+      background: #1f6feb22;
+      border: 1px solid #1f6feb55;
+      border-radius: 8px;
+      padding: 6px 10px;
+      max-width: 320px;
+    }
+    .buff-chip .bname { font-weight: 600; color: var(--accent); font-size: .88rem; }
+    .buff-chip .beffect { color: var(--text); font-size: .82rem; white-space: pre-line; }
+    .buff-chip .bdesc { color: var(--muted); font-size: .75rem; }
+    .buff-chip.remove { background: #da363322; border-color: #da363355; }
+    .buff-chip.remove .bname { color: var(--red); }
     .ii-ph {
       width: 28px; height: 28px;
       background: #21262d;
@@ -351,11 +378,92 @@
     let produces = new Map();
     let uses = new Map();
     let salvageOf = new Map();
+    let tradesGive = new Map(); // item -> trades where this item is received
+    let tradesCost = new Map(); // item -> trades where this item is spent
+    let stationProducts = new Map(); // station name -> list of result item names
     let activeIdx = -1;
     let currentSuggestions = [];
     let currentRoot = null;
     let expandState = new Map();
     let historyStack = []; // previous roots for Back
+
+    // Stations / plots that should show a "Produces" panel
+    const STATION_ALIASES = {
+      "Crafting Bench": ["Crafting Bench", "Inventory or Crafting Bench"],
+      "Chemistry Bench": ["Chemistry Bench"],
+      "Ammo Station": ["Ammo Station"],
+      "Chef's Counter": ["Chef's Counter"],
+      "Distillation Bench": ["Distillation"],
+      "Enhancement Bench": ["Upgrade"],
+      "Repair and Salvage Station": []
+    };
+    // Garden plots grow plant seeds; digital plot grows cartridges
+    const GARDEN_PLOT_NAMES = new Set([
+      "Garden Plot (Square)", "Garden Plot (Round)", "Garden Plot (Medium)", "Garden Plot (Large)"
+    ]);
+    const DIGITAL_PLOT_NAME = "Digital Garden Plot";
+    let cooksInto = new Map(); // raw/uncooked -> cooked name
+    let cookedFrom = new Map(); // cooked -> raw/uncooked name
+
+    // Browse categories: query keyword -> { title, match(item) }
+    const BROWSE_CATEGORIES = [
+      { keys: ["weapon", "weapons"], title: "Weapons & Ammo",
+        match: function(it) { return (it.category || "").toLowerCase().indexOf("weapon") !== -1; } },
+      { keys: ["melee"], title: "Melee weapons",
+        match: function(it) { const t = ((it.effects || {}).weaponType || ""); return /melee/i.test(t); } },
+      { keys: ["blunt"], title: "Blunt melee",
+        match: function(it) { return /blunt/i.test(((it.effects || {}).weaponType || "")); } },
+      { keys: ["sharp"], title: "Sharp melee",
+        match: function(it) { return /sharp/i.test(((it.effects || {}).weaponType || "")); } },
+      { keys: ["ranged", "gun", "guns"], title: "Ranged weapons",
+        match: function(it) { return /ranged/i.test(((it.effects || {}).weaponType || "")); } },
+      { keys: ["throwable", "throwables"], title: "Throwables",
+        match: function(it) { return /throwable/i.test(((it.effects || {}).weaponType || "")); } },
+      { keys: ["ammo", "ammunition"], title: "Ammunition",
+        match: function(it) {
+          const t = ((it.effects || {}).weaponType || "");
+          return t === "Ammo" || /ammo/i.test(it.name || "");
+        } },
+      { keys: ["armor", "armour"], title: "Armor & Gear",
+        match: function(it) { return (it.category || "").toLowerCase().indexOf("armor") !== -1; } },
+      { keys: ["head", "helmet", "helmets"], title: "Head armor",
+        match: function(it) { return ((it.effects || {}).gearSlot || "") === "Head Armor"; } },
+      { keys: ["chest", "torso", "body armor"], title: "Chest armor",
+        match: function(it) { return ((it.effects || {}).gearSlot || "") === "Chest Armor"; } },
+      { keys: ["leg", "legs", "greaves"], title: "Leg armor",
+        match: function(it) { return ((it.effects || {}).gearSlot || "") === "Leg Armor"; } },
+      { keys: ["arm", "arms", "gauntlet", "gauntlets", "pauldron", "pauldrons"], title: "Arm armor",
+        match: function(it) { return ((it.effects || {}).gearSlot || "") === "Arm Armor"; } },
+      { keys: ["trinket", "trinkets"], title: "Trinkets",
+        match: function(it) { return ((it.effects || {}).gearSlot || "") === "Trinket"; } },
+      { keys: ["backpack", "backpacks", "pack", "packs"], title: "Backpacks",
+        match: function(it) { return ((it.effects || {}).gearSlot || "") === "Backpack"; } },
+      { keys: ["suit", "suits"], title: "Full body suits",
+        match: function(it) { return ((it.effects || {}).gearSlot || "") === "Full Body Suit"; } },
+      { keys: ["food", "foods"], title: "Food & Cooking",
+        match: function(it) { return (it.category || "").toLowerCase().indexOf("food") !== -1; } },
+      { keys: ["soup", "soups"], title: "Soups",
+        match: function(it) {
+          const n = (it.name || "").toLowerCase();
+          return /soup|stew|chowder|bisque|goulash|gumbo|consomme|consomm/.test(n);
+        } },
+      { keys: ["medical", "medicine", "health", "healing"], title: "Health & Medical",
+        match: function(it) { return (it.category || "").toLowerCase().indexOf("health") !== -1; } },
+      { keys: ["tool", "tools"], title: "Tools",
+        match: function(it) { return (it.category || "").toLowerCase() === "tools"; } },
+      { keys: ["resource", "resources", "material", "materials"], title: "Resources & Sub-components",
+        match: function(it) { return (it.category || "").toLowerCase().indexOf("resource") !== -1; } },
+      { keys: ["furniture", "bench", "benches"], title: "Furniture & Benches",
+        match: function(it) { return (it.category || "").toLowerCase().indexOf("furniture") !== -1; } },
+      { keys: ["farm", "farming", "seed", "seeds"], title: "Farming",
+        match: function(it) { return (it.category || "").toLowerCase().indexOf("farm") !== -1; } },
+      { keys: ["fish"], title: "Fish",
+        match: function(it) { return (it.category || "").toLowerCase() === "fish"; } },
+      { keys: ["collectible", "collectibles"], title: "Collectibles",
+        match: function(it) { return (it.category || "").toLowerCase().indexOf("collectible") !== -1; } },
+      { keys: ["defense", "base defense", "trap", "traps"], title: "Base defense",
+        match: function(it) { return (it.category || "").toLowerCase().indexOf("defense") !== -1; } },
+    ];
 
     function norm(s) { return (s || "").trim(); }
     function esc(s) {
@@ -510,6 +618,8 @@
       itemMap.clear(); imageMap.clear();
       produces.clear(); uses.clear();
       salvageOf.clear();
+      tradesGive.clear(); tradesCost.clear();
+      stationProducts.clear();
 
       for (const it of DATA.items) {
         const n = norm(it.name);
@@ -518,6 +628,25 @@
         if (it.image) imageMap.set(n, decodeEntities(it.image));
       }
       nameList = Array.from(itemMap.keys()).sort(function(a, b) { return a.localeCompare(b); });
+
+      function addTrade(map, key, trade) {
+        if (!key) return;
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push(trade);
+      }
+      for (const t of (DATA.trades || [])) {
+        addTrade(tradesGive, norm(t.gives), t);
+        addTrade(tradesCost, norm(t.costs), t);
+      }
+
+      function addStationProduct(station, result) {
+        station = norm(station);
+        result = norm(result);
+        if (!station || !result) return;
+        if (!stationProducts.has(station)) stationProducts.set(station, []);
+        const list = stationProducts.get(station);
+        if (list.indexOf(result) === -1) list.push(result);
+      }
 
       function pushCraftLike(r, type, station, maxIng) {
         const result = norm(r.resultItem);
@@ -535,6 +664,7 @@
         }
         addRecipe(produces, result, recipe);
         for (const ing of recipe.ingredients) addRecipe(uses, ing.item, recipe);
+        addStationProduct(station, result);
       }
 
       for (const r of DATA.recipes) {
@@ -566,6 +696,7 @@
         };
         addRecipe(produces, result, recipe);
         if (ing) addRecipe(uses, ing, recipe);
+        addStationProduct("Distillation", result);
       }
       for (const r of DATA.upgrades) {
         const result = norm(r.resultItem);
@@ -582,6 +713,46 @@
         }
         addRecipe(produces, result, recipe);
         for (const ing of recipe.ingredients) addRecipe(uses, ing.item, recipe);
+        addStationProduct("Upgrade", result);
+      }
+
+      // Sort station product lists
+      stationProducts.forEach(function(list, key) {
+        list.sort(function(a, b) { return a.localeCompare(b); });
+      });
+
+      // Cooked / uncooked links
+      cooksInto.clear(); cookedFrom.clear();
+      for (const it of DATA.items) {
+        for (const s of (it.sources || [])) {
+          if (s.type === "cook" && s.items) {
+            for (const raw of s.items) {
+              const r = norm(raw), c = norm(it.name);
+              if (r && c) { cooksInto.set(r, c); cookedFrom.set(c, r); }
+            }
+          }
+        }
+      }
+      // Heuristic: Raw X -> Cooked X / X
+      for (const name of nameList) {
+        if (cooksInto.has(name)) continue;
+        if (name.indexOf("Raw ") === 0) {
+          const base = name.slice(4);
+          const cands = ["Cooked " + base, base, "Roasted " + base];
+          for (const c of cands) {
+            if (itemMap.has(c) && c !== name) {
+              cooksInto.set(name, c);
+              if (!cookedFrom.has(c)) cookedFrom.set(c, name);
+              break;
+            }
+          }
+        } else if (name.indexOf("Uncooked ") === 0) {
+          const base = name.slice(9);
+          if (itemMap.has(base) && base !== name) {
+            cooksInto.set(name, base);
+            if (!cookedFrom.has(base)) cookedFrom.set(base, name);
+          }
+        }
       }
       for (const s of DATA.scraping) {
         const item = norm(s.item);
@@ -611,17 +782,47 @@
       }
     }
 
+    function resolveBrowse(q) {
+      q = (q || "").trim().toLowerCase();
+      if (!q) return null;
+      for (const cat of BROWSE_CATEGORIES) {
+        for (const k of cat.keys) {
+          if (k === q) return cat;
+        }
+      }
+      return null;
+    }
+
+    function itemsForBrowse(cat) {
+      const out = [];
+      for (const name of nameList) {
+        const it = itemMap.get(name);
+        if (it && cat.match(it)) out.push(name);
+      }
+      return out;
+    }
+
     function filterSuggestions(q) {
       q = q.trim().toLowerCase();
       if (!q) return [];
+      const results = [];
+      // Category browse hits first
+      for (const cat of BROWSE_CATEGORIES) {
+        for (const k of cat.keys) {
+          if (k.startsWith(q) || q.startsWith(k)) {
+            results.push({ kind: "browse", key: k, title: cat.title, cat: cat });
+            break;
+          }
+        }
+      }
       const starts = [], contains = [];
       for (const name of nameList) {
         const lower = name.toLowerCase();
-        if (lower.startsWith(q)) starts.push(name);
-        else if (lower.includes(q)) contains.push(name);
+        if (lower.startsWith(q)) starts.push({ kind: "item", name: name });
+        else if (lower.includes(q)) contains.push({ kind: "item", name: name });
         if (starts.length + contains.length >= 40) break;
       }
-      return starts.concat(contains).slice(0, 25);
+      return results.concat(starts, contains).slice(0, 30);
     }
 
     function renderSuggestions() {
@@ -631,7 +832,14 @@
         activeIdx = -1;
         return;
       }
-      sugEl.innerHTML = currentSuggestions.map(function(name, i) {
+      sugEl.innerHTML = currentSuggestions.map(function(entry, i) {
+        if (entry.kind === "browse") {
+          return '<div class="sug-item' + (i === activeIdx ? " active" : "") + '" data-idx="' + i + '">' +
+            '<span class="ii-ph" style="width:28px;height:28px;font-size:.65rem">☰</span>' +
+            "<span>Browse: " + esc(entry.title) + "</span>" +
+            '<span class="cat">category</span></div>';
+        }
+        const name = entry.name;
         const cat = (itemMap.get(name) && itemMap.get(name).category) || "";
         return '<div class="sug-item' + (i === activeIdx ? " active" : "") + '" data-idx="' + i + '">' +
           itemImgHtml(name, 28) +
@@ -654,12 +862,7 @@
         if (e.key === "Enter" && searchEl.value.trim()) {
           e.preventDefault();
           const q = searchEl.value.trim();
-          const exact = nameList.find(function(n) { return n.toLowerCase() === q.toLowerCase(); });
-          if (exact) selectItem(exact, true);
-          else {
-            currentSuggestions = filterSuggestions(q);
-            if (currentSuggestions[0]) selectItem(currentSuggestions[0], true);
-          }
+          activateSearch(q);
         }
         return;
       }
@@ -679,11 +882,12 @@
         activeIdx = e.shiftKey
           ? (activeIdx - 1 + currentSuggestions.length) % currentSuggestions.length
           : (activeIdx + 1) % currentSuggestions.length;
-        searchEl.value = currentSuggestions[activeIdx];
+        const ent = currentSuggestions[activeIdx];
+        searchEl.value = ent.kind === "browse" ? ent.key : ent.name;
         renderSuggestions();
       } else if (e.key === "Enter") {
         e.preventDefault();
-        if (activeIdx >= 0 && currentSuggestions[activeIdx]) selectItem(currentSuggestions[activeIdx], true);
+        if (activeIdx >= 0 && currentSuggestions[activeIdx]) activateEntry(currentSuggestions[activeIdx], true);
       } else if (e.key === "Escape") {
         sugEl.classList.remove("show");
         activeIdx = -1;
@@ -695,13 +899,50 @@
       if (!item) return;
       e.preventDefault();
       const idx = parseInt(item.dataset.idx, 10);
-      if (currentSuggestions[idx]) selectItem(currentSuggestions[idx], true);
+      if (currentSuggestions[idx]) activateEntry(currentSuggestions[idx], true);
     });
     searchEl.addEventListener("blur", function() {
       setTimeout(function() { sugEl.classList.remove("show"); }, 150);
     });
 
     // pushHistory: true when navigating to a new item (search or click), false when going back
+    function activateEntry(entry, pushHistory) {
+      if (!entry) return;
+      if (entry.kind === "browse") {
+        selectBrowse(entry.cat, entry.key || entry.title, pushHistory);
+      } else {
+        selectItem(entry.name, pushHistory);
+      }
+    }
+
+    function activateSearch(q) {
+      const browse = resolveBrowse(q);
+      if (browse) {
+        selectBrowse(browse, q, true);
+        return;
+      }
+      const exact = nameList.find(function(n) { return n.toLowerCase() === q.toLowerCase(); });
+      if (exact) { selectItem(exact, true); return; }
+      currentSuggestions = filterSuggestions(q);
+      if (currentSuggestions[0]) activateEntry(currentSuggestions[0], true);
+    }
+
+    function selectBrowse(cat, label, pushHistory) {
+      const key = "browse:" + cat.title;
+      if (pushHistory && currentRoot && currentRoot !== key) {
+        historyStack.push(currentRoot);
+      }
+      searchEl.value = label || cat.keys[0];
+      sugEl.classList.remove("show");
+      activeIdx = -1;
+      currentSuggestions = [];
+      expandState = new Map();
+      currentRoot = key;
+      updateBackBtn();
+      showBrowse(cat);
+      searchEl.focus();
+    }
+
     function selectItem(name, pushHistory) {
       if (pushHistory && currentRoot && currentRoot !== name) {
         historyStack.push(currentRoot);
@@ -717,14 +958,46 @@
       searchEl.focus();
     }
 
+    function showBrowse(cat) {
+      const main = document.getElementById("main");
+      const list = itemsForBrowse(cat);
+      let html = '<div class="item-header"><div><h2>' + esc(cat.title) + "</h2>" +
+        '<div class="meta"><span>' + list.length + " items</span></div>" +
+        '<div class="desc">Browse matching items. Click any to open its full page.</div></div></div>';
+      html += '<div class="panel"><h3>Items <span class="n">' + list.length + "</span></h3>";
+      if (!list.length) {
+        html += '<p class="empty">No items match this category.</p>';
+      } else {
+        html += '<div style="display:flex;flex-wrap:wrap;gap:6px">';
+        for (const name of list) {
+          const it = itemMap.get(name);
+          const sub = (it && it.category) ? it.category : "";
+          html += '<span class="chip" data-focus="' + esc(name) + '" title="' + esc(sub) + '">' +
+            itemImgHtml(name, 22) + esc(name) + "</span>";
+        }
+        html += "</div>";
+      }
+      html += "</div>";
+      main.innerHTML = html;
+      bindTreeEvents(main);
+    }
+
     function goBack() {
       if (!historyStack.length) return;
       const prev = historyStack.pop();
       updateBackBtn();
-      searchEl.value = prev;
       expandState = new Map();
       currentRoot = prev;
-      showItem(prev);
+      if (String(prev).indexOf("browse:") === 0) {
+        const title = String(prev).slice(7);
+        const cat = BROWSE_CATEGORIES.find(function(c) { return c.title === title; });
+        searchEl.value = cat ? cat.keys[0] : title;
+        if (cat) showBrowse(cat);
+        else showItem(prev);
+      } else {
+        searchEl.value = prev;
+        showItem(prev);
+      }
       searchEl.focus();
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
@@ -848,8 +1121,140 @@
         (it && it.description ? '<div class="desc">' + esc(it.description) + "</div>" : "") +
         "</div></div>";
 
-      // Sources (how to obtain this item)
-      const sources = (it && it.sources) || [];
+      // Effects / buffs / gear stats
+      (function() {
+        const fx = (it && it.effects) || null;
+        if (!fx) return;
+        const buffMap = (DATA && DATA.buffs) || {};
+        function buffInfo(buffName) {
+          const b = buffMap[buffName] || {};
+          return { name: buffName, effects: b.effects || "", description: b.description || "", type: b.type || "" };
+        }
+        let parts = [];
+        // Gear
+        if (fx.gearSlot || fx.gearArmor || fx.gearColdResist || fx.gearHeatResist || fx.gearCapacity || fx.gearWeightReduction || fx.radiationShielding || fx.gearShieldClass) {
+          let stats = [];
+          if (fx.gearSlot) stats.push(['Slot', fx.gearSlot]);
+          if (fx.gearArmor) stats.push(['Armor', '+' + fx.gearArmor]);
+          if (fx.gearColdResist) stats.push(['Cold resist', '+' + fx.gearColdResist]);
+          if (fx.gearHeatResist) stats.push(['Heat resist', '+' + fx.gearHeatResist]);
+          if (fx.radiationShielding) stats.push(['Rad shield', fx.radiationShielding]);
+          if (fx.gearWeightReduction) stats.push(['Weight red.', fx.gearWeightReduction]);
+          if (fx.gearCapacity) stats.push(['Capacity', fx.gearCapacity]);
+          if (fx.gearShieldClass) stats.push(['Shield class', fx.gearShieldClass]);
+          if (stats.length) {
+            parts.push('<div class="effect-grid">' + stats.map(function(s) {
+              return '<span class="effect-stat"><span class="elabel">' + esc(s[0]) + '</span><span class="eval">' + esc(s[1]) + '</span></span>';
+            }).join('') + '</div>');
+          }
+          if (fx.gearSetBonusHalf || fx.gearSetBonusFull || fx.gearSetBonus) {
+            let setHtml = '<div class="effect-grid" style="margin-top:8px">';
+            if (fx.gearSetBonusHalf) {
+              const bi = buffInfo(fx.gearSetBonusHalf);
+              setHtml += '<div class="buff-chip"><span class="bname">2-set: ' + esc(bi.name) + '</span>' +
+                (bi.effects ? '<span class="beffect">' + esc(bi.effects) + '</span>' : '') +
+                (bi.description ? '<span class="bdesc">' + esc(bi.description) + '</span>' : '') + '</div>';
+            }
+            if (fx.gearSetBonusFull) {
+              const bi = buffInfo(fx.gearSetBonusFull);
+              setHtml += '<div class="buff-chip"><span class="bname">Full set: ' + esc(bi.name) + '</span>' +
+                (bi.effects ? '<span class="beffect">' + esc(bi.effects) + '</span>' : '') +
+                (bi.description ? '<span class="bdesc">' + esc(bi.description) + '</span>' : '') + '</div>';
+            }
+            if (fx.gearSetBonus) {
+              const bi = buffInfo(fx.gearSetBonus);
+              setHtml += '<div class="buff-chip"><span class="bname">Set: ' + esc(bi.name) + '</span>' +
+                (bi.effects ? '<span class="beffect">' + esc(bi.effects) + '</span>' : '') +
+                (bi.description ? '<span class="bdesc">' + esc(bi.description) + '</span>' : '') + '</div>';
+            }
+            setHtml += '</div>';
+            parts.push(setHtml);
+          }
+        }
+        // Weapon
+        if (fx.weaponType || fx.weaponDamage) {
+          let stats = [];
+          if (fx.weaponType) stats.push(['Type', fx.weaponType]);
+          if (fx.weaponDamage) stats.push(['Damage', fx.weaponDamage + (fx.weaponDamageType ? ' ' + fx.weaponDamageType : '')]);
+          if (fx.weaponBonusDamage) stats.push(['Bonus', fx.weaponBonusDamage + (fx.weaponBonusDamageType ? ' ' + fx.weaponBonusDamageType : '')]);
+          parts.push('<div class="effect-grid">' + stats.map(function(s) {
+            return '<span class="effect-stat"><span class="elabel">' + esc(s[0]) + '</span><span class="eval">' + esc(s[1]) + '</span></span>';
+          }).join('') + '</div>');
+        }
+        // Consumable fills
+        const fills = [];
+        if (fx.consumableHungerFill) fills.push(['Hunger', fx.consumableHungerFill]);
+        if (fx.consumableThirstFill) fills.push(['Thirst', fx.consumableThirstFill]);
+        if (fx.consumableFatigueFill) fills.push(['Fatigue', fx.consumableFatigueFill]);
+        if (fx.consumableRadiation) fills.push(['Radiation', fx.consumableRadiation]);
+        if (fills.length) {
+          parts.push('<div class="effect-grid">' + fills.map(function(s) {
+            const neg = String(s[1]).trim().charAt(0) === '-';
+            return '<span class="effect-stat"><span class="elabel">' + esc(s[0]) + '</span><span class="eval' + (neg ? ' neg' : '') + '">' + esc(s[1]) + '</span></span>';
+          }).join('') + '</div>');
+        }
+        if (fx.consumableOtherEffects) {
+          parts.push('<p style="margin:6px 0 0;font-size:.88rem">' + esc(fx.consumableOtherEffects) + '</p>');
+        }
+        // Applied buffs
+        const adds = [];
+        const rems = [];
+        for (let i = 1; i <= 6; i++) {
+          if (fx['consumableAddsBuff' + i]) adds.push(fx['consumableAddsBuff' + i]);
+          if (fx['consumableRemovesBuff' + i]) rems.push(fx['consumableRemovesBuff' + i]);
+        }
+        if (adds.length || rems.length) {
+          let bh = '<div class="effect-grid" style="margin-top:8px">';
+          for (const bn of adds) {
+            const bi = buffInfo(bn);
+            bh += '<div class="buff-chip"><span class="bname">Buff: ' + esc(bi.name) + '</span>' +
+              (bi.effects ? '<span class="beffect">' + esc(bi.effects) + '</span>' : '') +
+              (bi.description ? '<span class="bdesc">' + esc(bi.description) + '</span>' : '') + '</div>';
+          }
+          for (const bn of rems) {
+            const bi = buffInfo(bn);
+            bh += '<div class="buff-chip remove"><span class="bname">Removes: ' + esc(bi.name) + '</span>' +
+              (bi.effects ? '<span class="beffect">' + esc(bi.effects) + '</span>' : '') +
+              (bi.description ? '<span class="bdesc">' + esc(bi.description) + '</span>' : '') + '</div>';
+          }
+          bh += '</div>';
+          parts.push(bh);
+        }
+        if (!parts.length) return;
+        html += '<div class="panel"><h3>Effects</h3>' + parts.join('') + '</div>';
+      })();
+
+      // Cooking links (raw/uncooked <-> cooked)
+      (function() {
+        const into = cooksInto.get(name);
+        const from = cookedFrom.get(name);
+        if (!into && !from) return;
+        html += '<div class="panel"><h3>Cooking</h3>';
+        if (into) {
+          html += '<div class="flow"><span class="type-tag badge badge-soup">Cook</span>' +
+            '<span class="chip result-hl" data-focus="' + esc(name) + '">' + itemImgHtml(name, 20) + esc(name) + "</span>" +
+            '<span class="alt-arrow">→</span>' +
+            '<span class="chip" data-focus="' + esc(into) + '">' + itemImgHtml(into, 20) + esc(into) + "</span>" +
+            '<span class="station-tag">Stove</span></div>';
+        }
+        if (from) {
+          html += '<div class="flow"><span class="type-tag badge badge-soup">From</span>' +
+            '<span class="chip" data-focus="' + esc(from) + '">' + itemImgHtml(from, 20) + esc(from) + "</span>" +
+            '<span class="alt-arrow">→</span>' +
+            '<span class="chip result-hl" data-focus="' + esc(name) + '">' + itemImgHtml(name, 20) + esc(name) + "</span>" +
+            '<span class="station-tag">Stove</span></div>';
+        }
+        html += "</div>";
+      })();
+
+      // Sources: only non-recipe sources (soup_any, cook, etc.).
+      // Craft / chem / distill / upgrade / soup recipes already appear in the recipe tree.
+      const RECIPE_SOURCE_TYPES = { craft: 1, chem: 1, distill: 1, upgrade: 1, soup: 1 };
+      const sources = ((it && it.sources) || []).filter(function(src) {
+        if (src.type === "soup_any" || src.type === "cook") return true;
+        if (src.type === "soup" && src.items && src.items.length) return true;
+        return !RECIPE_SOURCE_TYPES[src.type];
+      });
       html += '<div class="panel"><h3>Sources <span class="n">' + sources.length + "</span></h3>";
       if (sources.length) {
         for (const src of sources) {
@@ -874,7 +1279,6 @@
               html += "</div>";
             }
           } else {
-            // craft / chem / distill / upgrade
             const ings = (src.ingredients || []).map(function(ing) {
               return '<span class="chip" data-focus="' + esc(ing.item) + '">' +
                 itemImgHtml(ing.item, 20) + '<span class="qty">' + (ing.amount || 1) + "×</span>" +
@@ -892,9 +1296,86 @@
           }
         }
       } else {
-        html += '<p class="empty">No crafting/cooking sources recorded. (May be found in the world, looted, or obtained another way.)</p>';
+        html += '<p class="empty">No special sources recorded. Crafting recipes (if any) are shown in the tree below. Item may also be found in the world or looted.</p>';
       }
       html += "</div>";
+
+      // Trading
+      const asGives = tradesGive.get(name) || [];
+      const asCosts = tradesCost.get(name) || [];
+      const tradeCount = asGives.length + asCosts.length;
+      html += '<div class="panel"><h3>Trading <span class="n">' + tradeCount + "</span></h3>";
+      if (tradeCount) {
+        if (asGives.length) {
+          html += '<div class="alts-title" style="margin-bottom:6px">Received from trades</div>';
+          for (const t of asGives) {
+            html += '<div class="flow">' +
+              '<span class="chip" data-focus="' + esc(t.costs) + '">' + itemImgHtml(t.costs, 20) +
+              '<span class="qty">' + esc(String(t.costsAmount)) + "×</span>" + esc(t.costs) + "</span>" +
+              '<span class="alt-arrow">→</span>' +
+              '<span class="chip result-hl" data-focus="' + esc(t.gives) + '">' + itemImgHtml(t.gives, 20) +
+              '<span class="qty">' + esc(String(t.givesAmount)) + "×</span>" + esc(t.gives) + "</span>" +
+              '<span class="station-tag">' + esc(t.trader) +
+              (t.stock != null && t.stock !== "" ? " · stock " + esc(String(t.stock)) : "") +
+              (t.unlock ? " · " + esc(t.unlock) : "") + "</span></div>";
+          }
+        }
+        if (asCosts.length) {
+          html += '<div class="alts-title" style="margin:10px 0 6px">Spent in trades</div>';
+          for (const t of asCosts) {
+            html += '<div class="flow">' +
+              '<span class="chip result-hl" data-focus="' + esc(t.costs) + '">' + itemImgHtml(t.costs, 20) +
+              '<span class="qty">' + esc(String(t.costsAmount)) + "×</span>" + esc(t.costs) + "</span>" +
+              '<span class="alt-arrow">→</span>' +
+              '<span class="chip" data-focus="' + esc(t.gives) + '">' + itemImgHtml(t.gives, 20) +
+              '<span class="qty">' + esc(String(t.givesAmount)) + "×</span>" + esc(t.gives) + "</span>" +
+              '<span class="station-tag">' + esc(t.trader) +
+              (t.stock != null && t.stock !== "" ? " · stock " + esc(String(t.stock)) : "") +
+              (t.unlock ? " · " + esc(t.unlock) : "") + "</span></div>";
+          }
+        }
+      } else {
+        html += '<p class="empty">Not used in any known NPC or exchanger trade.</p>';
+      }
+      html += "</div>";
+
+      // Station / plot products helper (rendered after Salvage)
+      function collectStationResults(itemName) {
+        const results = [];
+        const seen = new Set();
+        function pushAll(list) {
+          if (!list) return;
+          for (const r of list) {
+            if (!seen.has(r)) { seen.add(r); results.push(r); }
+          }
+        }
+        if (STATION_ALIASES[itemName]) {
+          for (const alias of STATION_ALIASES[itemName]) pushAll(stationProducts.get(alias));
+        }
+        pushAll(stationProducts.get(itemName));
+        if (itemName === "Crafting Bench") pushAll(stationProducts.get("Inventory or Crafting Bench"));
+        if (GARDEN_PLOT_NAMES.has(itemName)) {
+          for (const n of nameList) {
+            const lower = n.toLowerCase();
+            if (lower.endsWith(" seed") && !lower.includes("cartridge")) {
+              if (!seen.has(n)) { seen.add(n); results.push(n); }
+            }
+            if (n === "Potato" || n === "Carrot" || n === "Aloe") {
+              if (!seen.has(n)) { seen.add(n); results.push(n); }
+            }
+          }
+        }
+        if (itemName === DIGITAL_PLOT_NAME) {
+          for (const n of nameList) {
+            const lower = n.toLowerCase();
+            if (lower.includes("cartridge") && lower !== "blank printing cartridge") {
+              if (!seen.has(n)) { seen.add(n); results.push(n); }
+            }
+          }
+        }
+        results.sort(function(a, b) { return a.localeCompare(b); });
+        return results;
+      }
 
       html += '<section style="margin-bottom:16px">' +
         '<h3 style="margin:0 0 8px;color:var(--accent);font-size:1rem">Recipe tree → base components</h3>' +
@@ -962,6 +1443,20 @@
       }
       html += "</div>";
 
+      // Station / plot products (last — secondary info)
+      const stationResults = collectStationResults(name);
+      if (stationResults.length) {
+        const label = GARDEN_PLOT_NAMES.has(name)
+          ? "Can grow (seeds / plants)"
+          : (name === DIGITAL_PLOT_NAME ? "Can print (cartridges)" : "Can craft / produce");
+        html += '<div class="panel"><h3>' + esc(label) + ' <span class="n">' + stationResults.length + "</span></h3>";
+        html += '<div style="display:flex;flex-wrap:wrap;gap:6px">';
+        for (const r of stationResults) {
+          html += '<span class="chip" data-focus="' + esc(r) + '">' + itemImgHtml(r, 22) + esc(r) + "</span>";
+        }
+        html += "</div></div>";
+      }
+
       main.innerHTML = html;
       bindTreeEvents(main);
     }
@@ -996,14 +1491,14 @@
     }
 
     document.getElementById("btn-expand").onclick = function() {
-      if (!currentRoot) return;
+      if (!currentRoot || String(currentRoot).indexOf("browse:") === 0) return;
       window.__forceExpandAll = true;
       expandState = new Map();
       showItem(currentRoot);
       window.__forceExpandAll = false;
     };
     document.getElementById("btn-collapse").onclick = function() {
-      if (!currentRoot) return;
+      if (!currentRoot || String(currentRoot).indexOf("browse:") === 0) return;
       window.__forceCollapseAll = true;
       expandState = new Map();
       showItem(currentRoot);
